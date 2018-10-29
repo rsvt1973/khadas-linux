@@ -21,7 +21,7 @@
 #include "partitions-linux.dtsi"
 #include "meson_drm.dtsi"
 / {
-	model = "Amlogic";
+	model = "Khadas VIM2";
 	amlogic-dt-id = "kvim2";
 	compatible = "amlogic, Gxm";
 	interrupt-parent = <&gic>;
