@@ -2142,6 +2142,8 @@ static void complete_ep(dwc_otg_pcd_ep_t *ep)
 	DWC_DEBUGPL(DBG_PCDV, "%s() %d-%s\n", __func__, ep->dwc_ep.num,
 		    (ep->dwc_ep.is_in ? "IN" : "OUT"));
 
+	memset(&deptsiz, 0, sizeof(deptsiz_data_t));
+
 	/* Get any pending requests */
 	if (!DWC_CIRCLEQ_EMPTY(&ep->queue)) {
 		req = DWC_CIRCLEQ_FIRST(&ep->queue);
