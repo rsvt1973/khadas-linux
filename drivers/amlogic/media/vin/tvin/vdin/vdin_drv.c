@@ -292,7 +292,7 @@ static const struct vframe_operations_s vdin_vf_ops = {
 #ifdef CONFIG_CMA
 void vdin_cma_alloc(struct vdin_dev_s *devp)
 {
-	char vdin_name[5];
+	char vdin_name[5 + 1];
 	unsigned int mem_size, h_size;
 	int flags = CODEC_MM_FLAGS_CMA_FIRST|CODEC_MM_FLAGS_CMA_CLEAR|
 		CODEC_MM_FLAGS_CPU;
@@ -367,7 +367,7 @@ void vdin_cma_alloc(struct vdin_dev_s *devp)
 
 void vdin_cma_release(struct vdin_dev_s *devp)
 {
-	char vdin_name[5];
+	char vdin_name[5 + 1];
 
 	if (devp->cma_config_en == 0)
 		return;
