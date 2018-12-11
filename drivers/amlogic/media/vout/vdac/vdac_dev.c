@@ -194,7 +194,7 @@ void ana_ref_cntl0_bit9(bool on, unsigned int module_sel)
 		vdac_hiu_reg_setb(HHI_VDAC_CNTL0, enable, 9, 1);
 	else
 #endif
-	vdac_hiu_reg_setb(HHI_VDAC_CNTL0, ~enable, 9, 1);
+	vdac_hiu_reg_setb(HHI_VDAC_CNTL0, !enable, 9, 1);
 #if 0
 	pr_info("\nvdac_cntl0_bit9 reg:0x%x\n",
 			vdac_hiu_reg_getb(HHI_VDAC_CNTL0, 9, 1));
@@ -352,7 +352,7 @@ void vdac_out_cntl1_bit3(bool on, unsigned int module_sel)
 		vdac_hiu_reg_setb(HHI_VDAC_CNTL1, enable, 3, 1);
 	else
 #endif
-	vdac_hiu_reg_setb(HHI_VDAC_CNTL1, ~enable, 3, 1);
+	vdac_hiu_reg_setb(HHI_VDAC_CNTL1, !enable, 3, 1);
 #if 0
 	pr_info("\nvdac_cntl1_bit3 reg:0x%x\n",
 		vdac_hiu_reg_getb(HHI_VDAC_CNTL1, 3, 1));
