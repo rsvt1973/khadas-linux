@@ -1179,15 +1179,9 @@
 };
 &i2c_b {
 	status = "okay";
-
 	khadas-hym8563{
 		compatible = "khadas-hym8563";
 		reg = <0x51>;
-	};
-
-	khadas-wol{
-		compatible = "khadas-wol";
-		reg = <0x18>;
 	};
 };
 
