@@ -48,57 +48,17 @@ static void rtl8211f_config_pad_isolation(struct phy_device *phydev, int enable)
 static void rtl8211f_config_wol(struct phy_device *phydev, int enable);
 static void rtl8211f_config_speed(struct phy_device *phydev, int mode);
 
-static int wol_enable = 0;
 static u8 mac_addr[] = {0, 0, 0, 0, 0, 0};
 #ifdef CONFIG_AMLOGIC_LEGACY_EARLY_SUSPEND
 #include <linux/amlogic/pm.h>
 struct phy_device *g_phydev;
 
+extern int mcu_get_wol_status(void);
 int get_wol_state(void){
-	return wol_enable;
+	return mcu_get_wol_status();
 }
 
-void rtl8211f_shutdown(void) {
-	if (wol_enable && g_phydev) {
-		rtl8211f_config_speed(g_phydev, 0);
-		rtl8211f_config_mac_addr(g_phydev);
-		rtl8211f_config_max_packet(g_phydev);
-		rtl8211f_config_wol(g_phydev, 1);
-		rtl8211f_config_wakeup_frame_mask(g_phydev);
-		rtl8211f_config_pad_isolation(g_phydev, 1);
-	}
-}
-
-void rtl8211f_suspend(void) {
-	if (wol_enable && g_phydev) {
-		rtl8211f_config_mac_addr(g_phydev);
-		rtl8211f_config_max_packet(g_phydev);
-		rtl8211f_config_wol(g_phydev, 1);
-		rtl8211f_config_wakeup_frame_mask(g_phydev);
-		rtl8211f_config_pad_isolation(g_phydev, 1);
-	}
-}
-
-void rtl8211f_resume(void) {
-	if (wol_enable && g_phydev) {
-		rtl8211f_config_speed(g_phydev, 1);
-		rtl8211f_config_wol(g_phydev, 0);
-		rtl8211f_config_pad_isolation(g_phydev, 0);
-	}
-}
-
-static unsigned char chartonum(char c)
-{
-	if (c >= '0' && c <= '9')
-		return c - '0';
-	if (c >= 'A' && c <= 'F')
-		return (c - 'A') + 10;
-	if (c >= 'a' && c <= 'f')
-		return (c - 'a') + 10;
-	return 0;
-}
-
-static void enable_wol(int enable, bool is_shutdown)
+void enable_wol(int enable, bool is_shutdown)
 {
 	if (g_phydev != NULL) {
 		if (enable == 1 || enable == 3) {
@@ -119,13 +79,38 @@ void realtek_enable_wol(int enable, bool is_shutdown)
 	enable_wol(enable, is_shutdown);
 }
 
-static int __init init_wol_state(char *str)
-{
-	wol_enable = simple_strtol(str, NULL, 0);
-	printk("%s, wol_enable=%d\b",__func__, wol_enable);
-	return 1;
+void rtl8211f_shutdown(void) {
+	enable_wol(get_wol_state(), true);
 }
-__setup("wol_enable=", init_wol_state);
+
+void rtl8211f_suspend(void) {
+	if (get_wol_state() && g_phydev) {
+		rtl8211f_config_mac_addr(g_phydev);
+		rtl8211f_config_max_packet(g_phydev);
+		rtl8211f_config_wol(g_phydev, 1);
+		rtl8211f_config_wakeup_frame_mask(g_phydev);
+		rtl8211f_config_pad_isolation(g_phydev, 1);
+	}
+}
+
+void rtl8211f_resume(void) {
+	if (get_wol_state() && g_phydev) {
+		rtl8211f_config_speed(g_phydev, 1);
+		rtl8211f_config_wol(g_phydev, 0);
+		rtl8211f_config_pad_isolation(g_phydev, 0);
+	}
+}
+
+static unsigned char chartonum(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'A' && c <= 'F')
+		return (c - 'A') + 10;
+	if (c >= 'a' && c <= 'f')
+		return (c - 'a') + 10;
+	return 0;
+}
 
 static int __init init_mac_addr(char *line)
 {
@@ -145,10 +130,9 @@ static int __init init_mac_addr(char *line)
 __setup("androidboot.mac=",init_mac_addr);
 
 
-
 static void rtl8211f_early_suspend(struct early_suspend *h)
 {
-	if (wol_enable && g_phydev) {
+	if (get_wol_state() && g_phydev) {
 		rtl8211f_config_mac_addr(g_phydev);
 		rtl8211f_config_max_packet(g_phydev);
 		rtl8211f_config_wol(g_phydev, 1);
@@ -159,7 +143,7 @@ static void rtl8211f_early_suspend(struct early_suspend *h)
 
 static void rtl8211f_late_resume(struct early_suspend *h)
 {
-	if (wol_enable && g_phydev) {
+	if (get_wol_state() && g_phydev) {
 		rtl8211f_config_speed(g_phydev, 1);
 		rtl8211f_config_wol(g_phydev, 0);
 		rtl8211f_config_pad_isolation(g_phydev, 0);
@@ -341,6 +325,9 @@ static int rtl8211f_config_init(struct phy_device *phydev)
 	g_phydev = phydev;
 	register_early_suspend(&rtl8211f_early_suspend_handler);
 #endif
+
+	if (3 == mcu_get_wol_status())
+		enable_wol(3, false);
 
 	return 0;
 }

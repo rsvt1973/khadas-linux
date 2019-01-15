@@ -22,13 +22,66 @@
 #include <linux/of_address.h>
 
 
+
 /* Device registers */
-#define MCU_WOL_REG    0x21
+#define MCU_WOL_REG		0x21
+#define MCU_FAN_CTRL	0x88
+
+#define KHADAS_FAN_TRIG_TEMP_LEVEL0		50	// 50 degree if not set
+#define KHADAS_FAN_TRIG_TEMP_LEVEL1		60	// 60 degree if not set
+#define KHADAS_FAN_TRIG_TEMP_LEVEL2		70	// 70 degree if not set
+#define KHADAS_FAN_TRIG_MAXTEMP		80
+#define KHADAS_FAN_LOOP_SECS 		30 * HZ	// 30 seconds
+#define KHADAS_FAN_TEST_LOOP_SECS   5 * HZ  // 5 seconds
+#define KHADAS_FAN_LOOP_NODELAY_SECS   	0
+#define KHADAS_FAN_SPEED_OFF			0
+#define KHADAS_FAN_SPEED_LOW            1
+#define KHADAS_FAN_SPEED_MID            2
+#define KHADAS_FAN_SPEED_HIGH           3
+
+enum khadas_fan_mode {
+	KHADAS_FAN_STATE_MANUAL = 0,
+	KHADAS_FAN_STATE_AUTO,
+};
+
+enum khadas_fan_level {
+	KHADAS_FAN_LEVEL_0 = 0,
+	KHADAS_FAN_LEVEL_1,
+	KHADAS_FAN_LEVEL_2,
+	KHADAS_FAN_LEVEL_3,
+};
+
+enum khadas_fan_enable {
+	KHADAS_FAN_DISABLE = 0,
+	KHADAS_FAN_ENABLE,
+};
+
+enum khadas_fan_hwver {
+	KHADAS_FAN_HWVER_NONE = 0,
+	KHADAS_FAN_HWVER_V12,
+	KHADAS_FAN_HWVER_V13,
+	KHADAS_FAN_HWVER_V14
+};
+
+struct khadas_fan_data {
+	struct platform_device *pdev;
+	struct class *fan_class;
+	struct delayed_work work;
+	struct delayed_work fan_test_work;
+	enum    khadas_fan_enable enable;
+	enum 	khadas_fan_mode mode;
+	enum 	khadas_fan_level level;
+	int	trig_temp_level0;
+	int	trig_temp_level1;
+	int	trig_temp_level2;
+	enum khadas_fan_hwver hwver;
+};
 
 struct mcu_data {
 	struct i2c_client *client;
 	struct class *wol_class;
 	int wol_enable;
+	struct khadas_fan_data fan_data;
 };
 
 struct mcu_data *g_mcu_data;
@@ -100,6 +153,182 @@ static int mcu_i2c_write_regs(struct i2c_client *client,
 	return ret;
 }
 
+static int is_mcu_fan_control_available(void)
+{
+	// MCU FAN control only for Khadas VIM2 V13 and later.
+	if (g_mcu_data->fan_data.hwver > KHADAS_FAN_HWVER_V12)
+		return 1;
+	else
+		return 0;
+}
+
+static void khadas_fan_level_set(struct khadas_fan_data *fan_data, int level)
+{
+	if (is_mcu_fan_control_available()) {
+		int ret;
+		u8 data[2] = {0};
+
+		if(0 == level) {
+			data[0] = KHADAS_FAN_SPEED_OFF;
+		}else if(1 == level){
+			data[0] = KHADAS_FAN_SPEED_LOW;
+		}else if(2 == level){
+			data[0] = KHADAS_FAN_SPEED_MID;
+		}else if(3 == level){
+			data[0] = KHADAS_FAN_SPEED_HIGH;
+		}
+
+		ret = mcu_i2c_write_regs(g_mcu_data->client, MCU_FAN_CTRL, data, 1);
+		if (ret < 0) {
+			printk("write fan control err\n");
+			return;
+		}
+	}
+}
+
+extern int get_cpu_temp(void);
+static void fan_work_func(struct work_struct *_work)
+{
+	if (is_mcu_fan_control_available()) {
+		int temp = -EINVAL;
+		struct khadas_fan_data *fan_data = &g_mcu_data->fan_data;
+
+		temp = get_cpu_temp();
+
+		if(temp != -EINVAL){
+			if(temp < fan_data->trig_temp_level0 ) {
+				khadas_fan_level_set(fan_data, 0);
+			}else if(temp < fan_data->trig_temp_level1 ) {
+				khadas_fan_level_set(fan_data, 1);
+			}else if(temp < fan_data->trig_temp_level2 ) {
+				khadas_fan_level_set(fan_data, 2);
+			}else{
+				khadas_fan_level_set(fan_data, 3);
+			}
+		}
+
+		schedule_delayed_work(&fan_data->work, KHADAS_FAN_LOOP_SECS);
+	}
+}
+
+static void khadas_fan_set(struct khadas_fan_data  *fan_data)
+{
+	if (is_mcu_fan_control_available()) {
+
+		cancel_delayed_work(&fan_data->work);
+
+		if (fan_data->enable == KHADAS_FAN_DISABLE) {
+			khadas_fan_level_set(fan_data, 0);
+			return;
+		}
+		switch (fan_data->mode) {
+		case KHADAS_FAN_STATE_MANUAL:
+			switch(fan_data->level) {
+				case KHADAS_FAN_LEVEL_0:
+					khadas_fan_level_set(fan_data, 0);
+					break;
+				case KHADAS_FAN_LEVEL_1:
+					khadas_fan_level_set(fan_data, 1);
+					break;
+				case KHADAS_FAN_LEVEL_2:
+					khadas_fan_level_set(fan_data, 2);
+					break;
+				case KHADAS_FAN_LEVEL_3:
+					khadas_fan_level_set(fan_data, 3);
+					break;
+				default:
+					break;
+			}
+			break;
+
+		case KHADAS_FAN_STATE_AUTO:
+			// FIXME: achieve with a better way
+			schedule_delayed_work(&fan_data->work, KHADAS_FAN_LOOP_NODELAY_SECS);
+			break;
+
+		default:
+			break;
+		}
+	}
+}
+
+static ssize_t show_fan_enable(struct class *cls,
+			 struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "Fan enable: %d\n", g_mcu_data->fan_data.enable);
+}
+
+static ssize_t store_fan_enable(struct class *cls, struct class_attribute *attr,
+		       const char *buf, size_t count)
+{
+	int enable;
+
+	if (kstrtoint(buf, 0, &enable))
+		return -EINVAL;
+
+	// 0: manual, 1: auto
+	if( enable >= 0 && enable < 2 ){
+		g_mcu_data->fan_data.enable = enable;
+		khadas_fan_set(&g_mcu_data->fan_data);
+	}
+
+	return count;
+}
+
+static ssize_t show_fan_mode(struct class *cls,
+			 struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "Fan mode: %d\n", g_mcu_data->fan_data.mode);
+}
+
+static ssize_t store_fan_mode(struct class *cls, struct class_attribute *attr,
+		       const char *buf, size_t count)
+{
+	int mode;
+
+	if (kstrtoint(buf, 0, &mode))
+		return -EINVAL;
+
+	// 0: manual, 1: auto
+	if( mode >= 0 && mode < 2 ){
+		g_mcu_data->fan_data.mode = mode;
+		khadas_fan_set(&g_mcu_data->fan_data);
+	}
+
+	return count;
+}
+
+static ssize_t show_fan_level(struct class *cls,
+			 struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "Fan level: %d\n", g_mcu_data->fan_data.level);
+}
+
+static ssize_t store_fan_level(struct class *cls, struct class_attribute *attr,
+		       const char *buf, size_t count)
+{
+	int level;
+
+	if (kstrtoint(buf, 0, &level))
+		return -EINVAL;
+
+	if( level >= 0 && level < 4){
+		g_mcu_data->fan_data.level = level;
+		khadas_fan_set(&g_mcu_data->fan_data);
+	}
+
+	return count;
+}
+
+static ssize_t show_fan_temp(struct class *cls,
+			 struct class_attribute *attr, char *buf)
+{
+	int temp = -EINVAL;
+    temp = get_cpu_temp();
+
+	return sprintf(buf, "cpu_temp:%d\nFan trigger temperature: level0:%d level1:%d level2:%d\n", temp, g_mcu_data->fan_data.trig_temp_level0, g_mcu_data->fan_data.trig_temp_level1, g_mcu_data->fan_data.trig_temp_level2);
+}
+
 static ssize_t store_wol_enable(struct class *cls, struct class_attribute *attr,
 		        const char *buf, size_t count)
 {
@@ -143,6 +372,13 @@ static struct class_attribute wol_class_attrs[] = {
 	__ATTR(enable, 0644, show_wol_enable, store_wol_enable),
 };
 
+static struct class_attribute fan_class_attrs[] = {
+	__ATTR(enable, 0644, show_fan_enable, store_fan_enable),
+	__ATTR(mode, 0644, show_fan_mode, store_fan_mode),
+	__ATTR(level, 0644, show_fan_level, store_fan_level),
+	__ATTR(temp, 0644, show_fan_temp, NULL),
+};
+
 static void create_mcu_attrs(void)
 {
 	int i;
@@ -156,6 +392,64 @@ static void create_mcu_attrs(void)
 		if (class_create_file(g_mcu_data->wol_class, &wol_class_attrs[i]))
 			pr_err("create wol attribute %s fail\n", wol_class_attrs[i].attr.name);
 	}
+
+	if (is_mcu_fan_control_available()) {
+		g_mcu_data->fan_data.fan_class = class_create(THIS_MODULE, "fan");
+		if (IS_ERR(g_mcu_data->fan_data.fan_class)) {
+			pr_err("create fan_class debug class fail\n");
+			return;
+		}
+
+		for (i=0; i<ARRAY_SIZE(fan_class_attrs); i++) {
+			if (class_create_file(g_mcu_data->fan_data.fan_class, &fan_class_attrs[i]))
+				pr_err("create fan attribute %s fail\n", fan_class_attrs[i].attr.name);
+		}
+	}
+}
+
+static int mcu_parse_dt(struct device *dev)
+{
+	int ret;
+	const char *hwver = NULL;
+
+	if (NULL == dev) return -EINVAL;
+
+	// Get hardwere version
+	ret = of_property_read_string(dev->of_node, "hwver", &hwver);
+	if (ret < 0) {
+		g_mcu_data->fan_data.hwver = KHADAS_FAN_HWVER_V12;
+	} else {
+		if (0 == strcmp(hwver, "VIM2.V12")) {
+			g_mcu_data->fan_data.hwver = KHADAS_FAN_HWVER_V12;
+		} else if (0 == strcmp(hwver, "VIM2.V13")) {
+			g_mcu_data->fan_data.hwver = KHADAS_FAN_HWVER_V13;
+		} else if (0 == strcmp(hwver, "VIM2.V14")) {
+			g_mcu_data->fan_data.hwver = KHADAS_FAN_HWVER_V14;
+		}
+		else {
+			g_mcu_data->fan_data.hwver = KHADAS_FAN_HWVER_NONE;
+		}
+	}
+
+	ret = of_property_read_u32(dev->of_node, "fan,trig_temp_level0", &g_mcu_data->fan_data.trig_temp_level0);
+	if (ret < 0)
+		g_mcu_data->fan_data.trig_temp_level0 = KHADAS_FAN_TRIG_TEMP_LEVEL0;
+	ret = of_property_read_u32(dev->of_node, "fan,trig_temp_level1", &g_mcu_data->fan_data.trig_temp_level1);
+	if (ret < 0)
+		g_mcu_data->fan_data.trig_temp_level1 = KHADAS_FAN_TRIG_TEMP_LEVEL1;
+	ret = of_property_read_u32(dev->of_node, "fan,trig_temp_level2", &g_mcu_data->fan_data.trig_temp_level2);
+	if (ret < 0)
+		g_mcu_data->fan_data.trig_temp_level2 = KHADAS_FAN_TRIG_TEMP_LEVEL2;
+
+	return ret;
+}
+
+int mcu_get_wol_status(void)
+{
+	if (g_mcu_data)
+		return g_mcu_data->wol_enable;
+
+	return 0;
 }
 
 static int mcu_probe(struct i2c_client *client, const struct i2c_device_id *id)
@@ -173,17 +467,27 @@ static int mcu_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	if (g_mcu_data == NULL)
 		return -ENOMEM;
 
+	mcu_parse_dt(&client->dev);
+
 	g_mcu_data->client = client;
 	ret = mcu_i2c_read_regs(client, MCU_WOL_REG, reg, 1);
 	if (ret < 0)
 		goto exit;
 	g_mcu_data->wol_enable = (int)reg[0];
+
+	if (is_mcu_fan_control_available()) {
+		g_mcu_data->fan_data.mode = KHADAS_FAN_STATE_AUTO;
+		g_mcu_data->fan_data.level = KHADAS_FAN_LEVEL_0;
+		g_mcu_data->fan_data.enable = KHADAS_FAN_DISABLE;
+
+		INIT_DELAYED_WORK(&g_mcu_data->fan_data.work, fan_work_func);
+		khadas_fan_level_set(&g_mcu_data->fan_data, 0);
+	}
 	create_mcu_attrs();
 	printk("%s,wol enable=%d\n",__func__ ,g_mcu_data->wol_enable);
 
 	if (g_mcu_data->wol_enable == 3)
 		mcu_enable_wol(g_mcu_data->wol_enable, false);
-
 
 	reg[0] = 0x01;
 	ret = mcu_i2c_write_regs(client, 0x87, reg, 1);
@@ -203,6 +507,36 @@ static int mcu_remove(struct i2c_client *client)
 	return 0;
 }
 
+static void khadas_fan_shutdown(struct i2c_client *client)
+{
+	g_mcu_data->fan_data.enable = KHADAS_FAN_DISABLE;
+	khadas_fan_set(&g_mcu_data->fan_data);
+}
+
+#ifdef CONFIG_PM_SLEEP
+static int khadas_fan_suspend(struct device *dev)
+{
+	cancel_delayed_work(&g_mcu_data->fan_data.work);
+	khadas_fan_level_set(&g_mcu_data->fan_data, 0);
+
+	return 0;
+}
+
+static int khadas_fan_resume(struct device *dev)
+{
+	khadas_fan_set(&g_mcu_data->fan_data);
+
+	return 0;
+}
+
+static const struct dev_pm_ops fan_dev_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(khadas_fan_suspend, khadas_fan_resume)
+};
+
+#define FAN_PM_OPS (&(fan_dev_pm_ops))
+
+#endif
+
 static const struct i2c_device_id mcu_id[] = {
 	{ "khadas-mcu", 0 },
 	{ }
@@ -221,9 +555,13 @@ struct i2c_driver mcu_driver = {
 		.name   = "khadas-mcu",
 		.owner  = THIS_MODULE,
 		.of_match_table = of_match_ptr(mcu_dt_ids),
+#ifdef CONFIG_PM_SLEEP
+		.pm = FAN_PM_OPS,
+#endif
 	},
 	.probe		= mcu_probe,
 	.remove 	= mcu_remove,
+	.shutdown = khadas_fan_shutdown,
 	.id_table	= mcu_id,
 };
 module_i2c_driver(mcu_driver);
