@@ -73,3 +73,4 @@ $(obj)/lkdtm_rodata_objcopy.o: $(obj)/lkdtm_rodata.o FORCE
 	$(call if_changed,objcopy)
 
 obj-$(CONFIG_KHADAS_FAN)    +=khadas-fan.o
+obj-$(CONFIG_KHADAS_MCU)    +=khadas-mcu.o

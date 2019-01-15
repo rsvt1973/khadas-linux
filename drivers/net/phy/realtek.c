@@ -98,6 +98,26 @@ static unsigned char chartonum(char c)
 	return 0;
 }
 
+static void enable_wol(int enable, bool is_shutdown)
+{
+	if (g_phydev != NULL) {
+		if (enable == 1 || enable == 3) {
+			rtl8211f_config_speed(g_phydev, is_shutdown ? 0:1);
+			rtl8211f_config_mac_addr(g_phydev);
+			rtl8211f_config_max_packet(g_phydev);
+			rtl8211f_config_wol(g_phydev, 1);
+			rtl8211f_config_wakeup_frame_mask(g_phydev);
+			rtl8211f_config_pad_isolation(g_phydev, 1);
+		} else {
+			rtl8211f_config_wol(g_phydev, 0);
+		}
+	}
+}
+
+void realtek_enable_wol(int enable, bool is_shutdown)
+{
+	enable_wol(enable, is_shutdown);
+}
 
 static int __init init_wol_state(char *str)
 {
